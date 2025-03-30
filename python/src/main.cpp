@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include <pybind11/pybind11.h>
-#include "libtailscale.h"
+#include "../tailscale.h"
 
 #define STRINGIFY(x) #x
 #define MACRO_STRINGIFY(x) STRINGIFY(x)
@@ -20,63 +20,71 @@ PYBIND11_MODULE(_tailscale, m) {
            :toctree: _generate
     )pbdoc";
 
-    m.def("new", &TsnetNewServer, R"pbdoc(
+    m.def("new", &tailscale_new, R"pbdoc(
         Create a new tsnet server
     )pbdoc");
 
-    m.def("start", &TsnetStart, R"pbdoc(
+    m.def("start", &tailscale_start, R"pbdoc(
         Starts a tsnet server
     )pbdoc");
 
-    m.def("up", &TsnetUp, R"pbdoc(
+    m.def("up", &tailscale_up, R"pbdoc(
         Brings the given tsnet server up
     )pbdoc");
 
-    m.def("close", &TsnetClose, R"pbdoc(
+    m.def("close", &tailscale_close, R"pbdoc(
         Closes a given tsnet server
     )pbdoc");
 
-    m.def("err_msg", &TsnetErrmsg, R"pbdoc(
+    m.def("err_msg", &tailscale_errmsg, R"pbdoc(
 
     )pbdoc");
 
-    m.def("listen", [](int sd, char* network, char* addr) { int listenerOut; int rv = TsnetListen(sd, network, addr, &listenerOut); return std::make_tuple(listenerOut, rv); }, R"pbdoc(
+    m.def("listen", [](int sd, char* network, char* addr) {
+            int listenerOut;
+            int rv = tailscale_listen(sd, network, addr, &listenerOut);
+            return std::make_tuple(listenerOut, rv);
+            }, R"pbdoc(
         Listen on a given protocol and port
     )pbdoc");
 
-    m.def("accept", [](int ld) { int connOut; int rv = TsnetAccept(ld, &connOut); return std::make_tuple(connOut, rv);}, R"pbdoc(
+    m.def("accept", [](int ld) {
+            int connOut;
+            int rv = tailscale_accept(ld, &connOut);
+            return std::make_tuple(connOut, rv);
+    }, R"pbdoc(
         Accept a given listener and connection
     )pbdoc");
 
-    m.def("dial", &TsnetDial, R"pbdoc(
+    m.def("dial", &tailscale_dial, R"pbdoc(
 
     )pbdoc");
 
-    m.def("set_dir", &TsnetSetDir, R"pbdoc(
+    m.def("set_dir", &tailscale_set_dir, R"pbdoc(
 
     )pbdoc");
 
-    m.def("set_hostname", &TsnetSetHostname, R"pbdoc(
+    m.def("set_hostname", &tailscale_set_hostname, R"pbdoc(
 
     )pbdoc");
 
-    m.def("set_authkey", &TsnetSetAuthKey, R"pbdoc(
+    m.def("set_authkey", &tailscale_set_authkey, R"pbdoc(
 
     )pbdoc");
 
-    m.def("set_control_url", &TsnetSetControlURL, R"pbdoc(
+    m.def("set_control_url", &tailscale_set_control_url, R"pbdoc(
 
     )pbdoc");
 
-    m.def("set_ephemeral", &TsnetSetEphemeral, R"pbdoc(
+    m.def("set_ephemeral", &tailscale_set_ephemeral, R"pbdoc(
         Set the given tsnet server to be an ephemeral node.
     )pbdoc");
 
-    m.def("set_log_fd", &TsnetSetLogFD, R"pbdoc(
+    m.def("set_log_fd", &tailscale_set_logfd, R"pbdoc(
 
     )pbdoc");
 
-    m.def("loopback", &TsnetLoopback, R"pbdoc(
+    m.def("loopback", &tailscale_loopback, R"pbdoc(
 
     )pbdoc");
 
