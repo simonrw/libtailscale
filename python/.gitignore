@@ -6,7 +6,5 @@ dist/
 build/
 *.whl
 
-pybind11/
-
 libtailscale.a
 libtailscale.h
