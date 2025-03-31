@@ -43,7 +43,6 @@ test-extras = ["test"]
 test-skip = ["*universal2:arm64"]
 # Setuptools bug causes collision between pypy and cpython artifacts
 before-build = "rm -rf {project}/build"
-build = ["cp3*-manylinux_x86_64"]
 
 [tool.ruff]
 extend-select = [

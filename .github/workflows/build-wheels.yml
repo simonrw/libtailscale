@@ -27,14 +27,12 @@ jobs:
           go build -buildmode=c-archive -o python/libtailscale.a github.com/tailscale/libtailscale
 
       - name: Build wheels
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         uses: pypa/cibuildwheel@v2.23.2
-        # env:
-        #   CIBW_SOME_OPTION: value
-        #    ...
+        env:
+          CIBW_BUILD: cp3*-manylinux_x86_64
         with:
           package-dir: python
-        #   output-dir: wheelhouse
-        #   config-file: "{package}/pyproject.toml"
 
       - uses: actions/upload-artifact@v4
         with:
