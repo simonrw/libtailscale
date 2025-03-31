@@ -1,6 +1,9 @@
 # Copyright (c) Tailscale Inc & AUTHORS
 # SPDX-License-Identifier: BSD-3-Clause
 
+[project]
+requires-python = ">= 3.10"
+
 [build-system]
 requires = [
     "setuptools>=42",
@@ -33,6 +36,7 @@ test-extras = ["test"]
 test-skip = ["*universal2:arm64"]
 # Setuptools bug causes collision between pypy and cpython artifacts
 before-build = "rm -rf {project}/build"
+build = ["cp312-manylinux*"]
 
 [tool.ruff]
 extend-select = [
