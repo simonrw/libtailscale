@@ -18,7 +18,7 @@ pub mod modern {
         /// See also: tailscale_up.
         ///
         /// Returns zero on success or -1 on error, call tailscale_errmsg for details.
-        pub fn tailscale_start(sd: libc::c_int) -> libc::c_int;
+        // pub fn tailscale_start(sd: libc::c_int) -> libc::c_int;
 
         /// Connects the server to the tailnet and waits for it to be usable.
         ///

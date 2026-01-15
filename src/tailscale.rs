@@ -48,6 +48,9 @@ pub enum TailscaleError {
 
     #[error("Failed to set ephemeral status")]
     SetEphemeral,
+
+    #[error("tailscale error: {0}")]
+    Tailscale(String),
 }
 
 pub type Result<T> = std::result::Result<T, TailscaleError>;
@@ -291,9 +294,21 @@ impl Tailscale {
 
     fn handle_error(&self, value: libc::c_int) -> Result<()> {
         if value > 0 {
-            panic!("Up bad: {value}");
+            let error_message = self.get_error_message()?;
+            return Err(TailscaleError::Tailscale(error_message));
         }
         Ok(())
+    }
+
+    fn get_error_message(&self) -> Result<String> {
+        let buf = [0u8; 2048];
+        let ret = unsafe { tailscale_errmsg(self.sd, buf.as_ptr() as *mut _, buf.len()) };
+        if ret > 0 {
+            todo!("error with fetching error message: {ret}")
+        }
+        let s = CStr::from_bytes_until_nul(&buf[..])?;
+        let s = s.to_str()?;
+        Ok(s.to_string())
     }
 }
 
