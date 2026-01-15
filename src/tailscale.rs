@@ -1,8 +1,10 @@
 use std::{
-    ffi::{CString, NulError},
+    ffi::{CStr, CString, FromBytesUntilNulError, NulError},
     io::Read,
+    net::{AddrParseError, Ipv4Addr, Ipv6Addr},
     os::fd::BorrowedFd,
     path::PathBuf,
+    str::{FromStr, Utf8Error},
 };
 
 use crate::sys::{TailscaleListener, modern::*};
@@ -11,11 +13,23 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum TailscaleError {
+    #[error("could not parse address: {0}")]
+    AddrParseError(String, AddrParseError),
+
     #[error("invalid utf-8 string")]
     Utf8Error(#[from] NulError),
 
+    #[error("missing null terminator")]
+    NullError(#[from] FromBytesUntilNulError),
+
+    #[error("invalid utf-8 string")]
+    Utf8ContentError(#[from] Utf8Error),
+
     #[error("invalid listen address given")]
     InvalidAddress(#[from] std::io::Error),
+
+    #[error("invalid ip addresses returned: {0}")]
+    InvalidIpAdresses(String),
 
     #[error("failed to recvmsg")]
     Recvmsg,
@@ -37,10 +51,6 @@ pub enum TailscaleError {
 }
 
 pub type Result<T> = std::result::Result<T, TailscaleError>;
-
-pub struct Tailscale {
-    sd: libc::c_int,
-}
 
 #[derive(Default, Clone)]
 pub struct TailscaleBuilder {
@@ -154,6 +164,16 @@ impl<'t> Listener<'t> {
     }
 }
 
+#[derive(Debug)]
+pub struct IpPair {
+    pub ipv4: Ipv4Addr,
+    pub ipv6: Ipv6Addr,
+}
+
+pub struct Tailscale {
+    sd: libc::c_int,
+}
+
 impl Tailscale {
     pub fn builder() -> TailscaleBuilder {
         TailscaleBuilder::default()
@@ -213,6 +233,29 @@ impl Tailscale {
             ln: listener,
             _tailscale: self,
         })
+    }
+
+    pub fn ips(&self) -> Result<Option<IpPair>> {
+        let buf = [0u8; 256];
+        let ret = unsafe { tailscale_getips(self.sd, buf.as_ptr() as *mut _, buf.len()) };
+        self.handle_error(ret)?;
+        let s = CStr::from_bytes_until_nul(&buf[..])?;
+        let s = s.to_str()?;
+
+        if s.is_empty() {
+            return Ok(None);
+        }
+
+        let (ipv4, ipv6) = s
+            .split_once(',')
+            .ok_or_else(|| TailscaleError::InvalidIpAdresses(s.to_string()))?;
+
+        let ipv4 = Ipv4Addr::from_str(ipv4)
+            .map_err(|e| TailscaleError::AddrParseError(ipv4.to_string(), e))?;
+        let ipv6 = Ipv6Addr::from_str(ipv6)
+            .map_err(|e| TailscaleError::AddrParseError(ipv6.to_string(), e))?;
+
+        Ok(Some(IpPair { ipv4, ipv6 }))
     }
 
     fn handle_error(&self, value: libc::c_int) -> Result<()> {
