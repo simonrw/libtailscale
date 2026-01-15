@@ -11,13 +11,18 @@ env:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    name: Test ${{ matrix.os }}
+    runs-on: "${{ matrix.os }}"
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
 
     steps:
     - uses: actions/checkout@v4
     - name: Set up Go
-      uses: actions/setup-go@v3
+      uses: actions/setup-go@v6
     - name: Compile go library
       run: make c-archive
     - uses: Swatinem/rust-cache@v2
