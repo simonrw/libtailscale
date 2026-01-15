@@ -17,16 +17,20 @@ fn handle_connection(mut conn: Connection) {
 }
 
 fn main() {
-    let ts = Tailscale::builder().ephemeral(true).build().unwrap();
+    let ts = Tailscale::builder()
+        .ephemeral(true)
+        .hostname("foo")
+        .build()
+        .unwrap();
     ts.up().unwrap();
 
     let listener = ts.listener("tcp", ":1999").unwrap();
-
     eprintln!("listening for connections");
-
-    loop {
-        let conn = listener.accept().unwrap();
-        eprintln!("got connection");
-        std::thread::spawn(move || handle_connection(conn));
-    }
+    std::thread::scope(|s| {
+        loop {
+            let conn = listener.accept().unwrap();
+            eprintln!("got connection from {}", conn.remote_addr().unwrap());
+            s.spawn(move || handle_connection(conn));
+        }
+    })
 }

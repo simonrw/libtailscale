@@ -1,7 +1,7 @@
 use std::{
     ffi::{CStr, CString, FromBytesUntilNulError, NulError},
     io::Read,
-    net::{AddrParseError, Ipv4Addr, Ipv6Addr},
+    net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr},
     os::fd::BorrowedFd,
     path::PathBuf,
     str::{FromStr, Utf8Error},
@@ -129,11 +129,39 @@ pub struct Listener<'t> {
 
 pub type TailscaleConn = libc::c_int;
 
-pub struct Connection {
+pub struct Connection<'t, 's: 't> {
+    listener: &'t Listener<'s>,
     conn: TailscaleConn,
 }
 
-impl Drop for Connection {
+impl<'t, 's> Connection<'t, 's> {
+    pub fn remote_addr(&self) -> Result<IpAddr> {
+        let buf = [0u8; 128];
+        let ret = unsafe {
+            tailscale_getremoteaddr(
+                self.listener.ln,
+                self.conn,
+                buf.as_ptr() as *mut _,
+                buf.len(),
+            )
+        };
+
+        // TODO
+        if ret > 0 {
+            panic!("handle return value");
+        }
+
+        let s = CStr::from_bytes_until_nul(&buf[..])?;
+        let s = s.to_str()?;
+
+        let addr =
+            IpAddr::from_str(s).map_err(|e| TailscaleError::AddrParseError(s.to_string(), e))?;
+
+        Ok(addr)
+    }
+}
+
+impl<'t, 's> Drop for Connection<'t, 's> {
     #[cfg(unix)]
     fn drop(&mut self) {
         eprintln!("dropping connection");
@@ -148,7 +176,7 @@ impl Drop for Connection {
     }
 }
 
-impl Read for Connection {
+impl<'t, 's> Read for Connection<'t, 's> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let fd = unsafe { BorrowedFd::borrow_raw(self.conn) };
         nix::unistd::read(fd, buf).map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
@@ -156,11 +184,14 @@ impl Read for Connection {
 }
 
 impl<'t> Listener<'t> {
-    pub fn accept(&self) -> Result<Connection> {
+    pub fn accept(&self) -> Result<Connection<'t, '_>> {
         let mut out_fd = 0;
         let _ret = unsafe { tailscale_accept(self.ln, &mut out_fd) };
         // TODO: handle ret
-        Ok(Connection { conn: out_fd })
+        Ok(Connection {
+            conn: out_fd,
+            listener: self,
+        })
     }
 }
 
@@ -204,12 +235,12 @@ impl Tailscale {
         Ok(())
     }
 
-    pub fn listener(
-        &self,
+    pub fn listener<'t>(
+        &'t self,
         network: &str,
         // addr: impl ToSocketAddrs,
         addr: &str,
-    ) -> Result<Listener<'_>> {
+    ) -> Result<Listener<'t>> {
         let network = std::ffi::CString::new(network).map_err(TailscaleError::Utf8Error)?;
         let addr = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
         // let addr = addr
