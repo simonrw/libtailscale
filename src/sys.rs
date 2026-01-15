@@ -14,5 +14,7 @@ pub mod modern {
         ) -> libc::c_int;
         pub fn tailscale_close(sd: libc::c_int) -> libc::c_int;
         pub fn tailscale_accept(ln: TailscaleListener, conn_out: *mut libc::c_int) -> libc::c_int;
+        pub fn tailscale_set_dir(sd: libc::c_int, dir: *mut libc::c_char) -> libc::c_int;
+        pub fn tailscale_set_hostname(sd: libc::c_int, hostname: *const libc::c_char) -> libc::c_int;
     }
 }

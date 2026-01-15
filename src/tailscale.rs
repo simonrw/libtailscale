@@ -1,4 +1,9 @@
-use std::{ffi::NulError, io::Read, os::fd::BorrowedFd, path::PathBuf};
+use std::{
+    ffi::{CString, NulError},
+    io::Read,
+    os::fd::BorrowedFd,
+    path::PathBuf,
+};
 
 use crate::sys::{TailscaleListener, modern::*};
 
@@ -17,6 +22,12 @@ pub enum TailscaleError {
 
     #[error("with control message")]
     ControlMessage,
+
+    #[error("Failed to set hostname")]
+    SetHostname,
+
+    #[error("Failed to set dir")]
+    SetDir,
 }
 
 pub type Result<T> = std::result::Result<T, TailscaleError>;
@@ -36,15 +47,22 @@ impl TailscaleBuilder {
     pub fn build(&self) -> Result<Tailscale> {
         let sd = unsafe { tailscale_new() };
         // TODO: handle if sd is 0
-        if let Some(_path) = &self.dir {
-            todo!()
-            // let ret = unsafe { TsnetSetDir(sd, dir.as_ptr() as *mut _) };
-            // if ret != 0 {
-            //     panic!("bad");
-            // }
+        if let Some(path) = &self.dir {
+            let path_s = path.display().to_string();
+            let path_cs = CString::new(path_s)?;
+            let ret = unsafe { tailscale_set_dir(sd, path_cs.as_ptr() as *mut _) };
+            if ret != 0 {
+                return Err(TailscaleError::SetDir);
+            }
         };
 
-        // TODO: set hostname
+        if let Some(hostname) = &self.hostname {
+            let c_hostname = CString::new(hostname.clone())?;
+            let ret = unsafe { tailscale_set_hostname(sd, c_hostname.as_ptr()) };
+            if ret != 0 {
+                return Err(TailscaleError::SetHostname);
+            }
+        }
 
         Ok(Tailscale { sd })
     }
