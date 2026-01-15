@@ -190,7 +190,7 @@ pub type TailscaleConn = libc::c_int;
 ///
 /// Implements `Read` for reading data from the connection.
 pub struct Connection<'t, 's: 't> {
-    listener: &'t Listener<'s>,
+    listener: Option<&'t Listener<'s>>,
     conn: TailscaleConn,
 }
 
@@ -200,15 +200,14 @@ impl<'t, 's> Connection<'t, 's> {
     /// # Errors
     ///
     /// Returns an error if the remote address cannot be retrieved or parsed.
-    pub fn remote_addr(&self) -> Result<IpAddr> {
+    pub fn remote_addr(&self) -> Result<Option<IpAddr>> {
+        let Some(listener) = &self.listener else {
+            return Ok(None);
+        };
+
         let buf = [0u8; 128];
         let ret = unsafe {
-            tailscale_getremoteaddr(
-                self.listener.ln,
-                self.conn,
-                buf.as_ptr() as *mut _,
-                buf.len(),
-            )
+            tailscale_getremoteaddr(listener.ln, self.conn, buf.as_ptr() as *mut _, buf.len())
         };
 
         // TODO
@@ -222,7 +221,7 @@ impl<'t, 's> Connection<'t, 's> {
         let addr =
             IpAddr::from_str(s).map_err(|e| TailscaleError::AddrParseError(s.to_string(), e))?;
 
-        Ok(addr)
+        Ok(Some(addr))
     }
 }
 
@@ -260,7 +259,7 @@ impl<'t> Listener<'t> {
         // TODO: handle ret
         Ok(Connection {
             conn: out_fd,
-            listener: self,
+            listener: Some(self),
         })
     }
 }
@@ -356,6 +355,30 @@ impl Tailscale {
         Ok(Listener {
             ln: listener,
             _tailscale: self,
+        })
+    }
+
+    /// Creates an outbound connection to another node on the Tailscale network.
+    ///
+    /// # Arguments
+    ///
+    /// * `network` - The network type (e.g., "tcp")
+    /// * `addr` - The address to connect to (e.g., "hostname:8080")
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection cannot be established.
+    pub fn connect<'t, 's: 't>(&'t self, network: &str, addr: &str) -> Result<Connection<'t, 's>> {
+        let network = std::ffi::CString::new(network).map_err(TailscaleError::Utf8Error)?;
+        let addr = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
+        let mut conn_fd = 0;
+
+        let ret = unsafe { tailscale_dial(self.sd, network.as_ptr(), addr.as_ptr(), &mut conn_fd) };
+        self.handle_error(ret)?;
+
+        Ok(Connection {
+            listener: None,
+            conn: conn_fd,
         })
     }
 

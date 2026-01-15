@@ -29,7 +29,9 @@ fn main() {
     std::thread::scope(|s| {
         loop {
             let conn = listener.accept().unwrap();
-            eprintln!("got connection from {}", conn.remote_addr().unwrap());
+            if let Some(addr) = conn.remote_addr().unwrap() {
+                eprintln!("got connection from {}", addr);
+            }
             s.spawn(move || handle_connection(conn));
         }
     })
