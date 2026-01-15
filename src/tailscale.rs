@@ -1,13 +1,7 @@
-use std::{
-    ffi::NulError,
-    io::{IoSliceMut, Read},
-    os::fd::{BorrowedFd, RawFd},
-    path::PathBuf,
-};
+use std::{ffi::NulError, io::Read, os::fd::BorrowedFd, path::PathBuf};
 
-use crate::sys::legacy::*;
+use crate::sys::{TailscaleListener, modern::*};
 
-use nix::sys::socket::{ControlMessageOwned, MsgFlags, recvmsg};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -40,7 +34,7 @@ pub struct TailscaleBuilder {
 
 impl TailscaleBuilder {
     pub fn build(&self) -> Result<Tailscale> {
-        let sd = unsafe { TsnetNewServer() };
+        let sd = unsafe { tailscale_new() };
         // TODO: handle if sd is 0
         if let Some(_path) = &self.dir {
             todo!()
@@ -108,22 +102,10 @@ impl Read for Connection {
 
 impl<'t> Listener<'t> {
     pub fn accept(&self) -> Result<Connection> {
-        let mut mbuf = [0u8; 256];
-        let mut iov = [IoSliceMut::new(&mut mbuf)];
-        let mut cbuf = nix::cmsg_space!(RawFd);
-
-        let msg = recvmsg::<()>(self.ln, &mut iov, Some(&mut cbuf), MsgFlags::empty())
-            .map_err(|_| TailscaleError::Recvmsg)?;
-
-        // Extract the file descriptor from the control message
-        for cmsg in msg.cmsgs().map_err(|_| TailscaleError::ControlMessage)? {
-            if let ControlMessageOwned::ScmRights(fds) = cmsg
-                && let Some(&fd) = fds.first()
-            {
-                return Ok(Connection { conn: fd });
-            }
-        }
-        todo!()
+        let mut out_fd = 0;
+        let _ret = unsafe { tailscale_accept(self.ln, &mut out_fd) };
+        // TODO: handle ret
+        Ok(Connection { conn: out_fd })
     }
 }
 
@@ -152,7 +134,7 @@ impl Tailscale {
     // }
 
     pub fn up(&self) -> Result<()> {
-        let ret = unsafe { TsnetUp(self.sd) };
+        let ret = unsafe { tailscale_up(self.sd) };
         self.handle_error(ret)?;
         Ok(())
     }
@@ -176,9 +158,10 @@ impl Tailscale {
         //         ))
         //     })?;
 
-        let mut listener: TailscaleListener = 0;
+        let mut listener = 0;
 
-        let ret = unsafe { TsnetListen(self.sd, network.as_ptr(), addr.as_ptr(), &mut listener) };
+        let ret =
+            unsafe { tailscale_listen(self.sd, network.as_ptr(), addr.as_ptr(), &mut listener) };
         self.handle_error(ret)?;
 
         Ok(Listener {
@@ -198,7 +181,7 @@ impl Tailscale {
 impl Drop for Tailscale {
     fn drop(&mut self) {
         eprintln!("dropping server");
-        let ret = unsafe { TsnetClose(self.sd) };
+        let ret = unsafe { tailscale_close(self.sd) };
         if let Err(e) = self.handle_error(ret) {
             eprintln!("error dropping tailscale: {e}");
         }
