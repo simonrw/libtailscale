@@ -17,6 +17,18 @@ libtailscale_ios_sim_x86_64.a:
 .PHONY: c-archive-ios
 c-archive-ios: libtailscale_ios.a  ## Builds libtailscale_ios.a for iOS (iOS SDK required)
 
+libtailscale2.a: libtailscale.a scratch/tailscale.o
+	cp libtailscale.a scratch
+	cd scratch && ar -x libtailscale.a
+	ar rcs $@ scratch/*.o
+
+scratch/tailscale.o: scratch
+	gcc -I . -O2 tailscale.c -c -o $@
+
+.PHONY: scratch
+scratch:
+	mkdir -p scratch
+
 .PHONY: c-archive-ios-sim
 c-archive-ios-sim: libtailscale_ios_sim_arm64.a libtailscale_ios_sim_x86_64.a ## Builds a fat binary for iOS (iOS SDK required)
 	lipo -create -output libtailscale_ios_sim.a libtailscale_ios_sim_x86_64.a libtailscale_ios_sim_arm64.a
