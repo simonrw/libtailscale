@@ -6,7 +6,7 @@
 
 use std::{
     ffi::{CStr, CString, FromBytesUntilNulError, NulError},
-    io::Read,
+    io::{Read, Write},
     net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr},
     os::fd::BorrowedFd,
     path::PathBuf,
@@ -244,6 +244,17 @@ impl<'t, 's> Read for Connection<'t, 's> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let fd = unsafe { BorrowedFd::borrow_raw(self.conn) };
         nix::unistd::read(fd, buf).map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
+    }
+}
+
+impl<'t, 's> Write for Connection<'t, 's> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let fd = unsafe { BorrowedFd::borrow_raw(self.conn) };
+        nix::unistd::write(fd, buf).map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
