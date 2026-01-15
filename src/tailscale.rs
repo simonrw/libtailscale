@@ -1,3 +1,9 @@
+//! High-level Rust bindings for the Tailscale library.
+//!
+//! This module provides safe, idiomatic Rust wrappers around the underlying
+//! Tailscale C API, enabling easy integration of Tailscale networking into
+//! Rust applications.
+
 use std::{
     ffi::{CStr, CString, FromBytesUntilNulError, NulError},
     io::Read,
@@ -11,6 +17,7 @@ use crate::sys::{TailscaleListener, modern::*};
 
 use thiserror::Error;
 
+/// Errors that can occur when working with Tailscale.
 #[derive(Debug, Error)]
 pub enum TailscaleError {
     #[error("could not parse address: {0}")]
@@ -53,8 +60,24 @@ pub enum TailscaleError {
     Tailscale(String),
 }
 
+/// A specialized `Result` type for Tailscale operations.
 pub type Result<T> = std::result::Result<T, TailscaleError>;
 
+/// Builder for configuring and creating a Tailscale instance.
+///
+/// Use this builder to set various configuration options before
+/// creating a Tailscale connection.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use libtailscale::Tailscale;
+/// let ts = Tailscale::builder()
+///     .hostname("my-host")
+///     .ephemeral(true)
+///     .build()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Default, Clone)]
 pub struct TailscaleBuilder {
     ephemeral: bool,
@@ -64,6 +87,11 @@ pub struct TailscaleBuilder {
 }
 
 impl TailscaleBuilder {
+    /// Builds and returns a configured Tailscale instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the configuration options fail to be set.
     pub fn build(&self) -> Result<Tailscale> {
         let sd = unsafe { tailscale_new() };
         // TODO: handle if sd is 0
@@ -101,23 +129,46 @@ impl TailscaleBuilder {
         Ok(Tailscale { sd })
     }
 
+    /// Sets the authentication key for this Tailscale instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The Tailscale authentication key
     pub fn auth_key(&mut self, key: impl Into<String>) -> &mut Self {
         let new = self;
         new.auth_key = Some(key.into());
         new
     }
 
+    /// Sets whether this node should be ephemeral.
+    ///
+    /// Ephemeral nodes are automatically removed from the network when they go offline.
+    ///
+    /// # Arguments
+    ///
+    /// * `ephemeral` - Whether the node should be ephemeral
     pub fn ephemeral(&mut self, ephemeral: bool) -> &mut Self {
         let new = self;
         new.ephemeral = ephemeral;
         new
     }
 
+    /// Sets the hostname for this Tailscale node.
+    ///
+    /// # Arguments
+    ///
+    /// * `hostname` - The desired hostname for the node
     pub fn hostname(&mut self, hostname: impl Into<String>) -> &mut Self {
         let new = self;
         new.hostname = Some(hostname.into());
         new
     }
+
+    /// Sets the state directory for Tailscale to store its configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - Path to the directory where Tailscale should store its state
     pub fn dir(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
         let new = self;
         new.dir = Some(dir.into());
@@ -125,6 +176,9 @@ impl TailscaleBuilder {
     }
 }
 
+/// A Tailscale network listener.
+///
+/// This listener can accept incoming connections from other nodes on the Tailscale network.
 pub struct Listener<'t> {
     ln: TailscaleListener,
     _tailscale: &'t Tailscale,
@@ -132,12 +186,20 @@ pub struct Listener<'t> {
 
 pub type TailscaleConn = libc::c_int;
 
+/// A connection accepted from a Tailscale listener.
+///
+/// Implements `Read` for reading data from the connection.
 pub struct Connection<'t, 's: 't> {
     listener: &'t Listener<'s>,
     conn: TailscaleConn,
 }
 
 impl<'t, 's> Connection<'t, 's> {
+    /// Returns the remote IP address of this connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the remote address cannot be retrieved or parsed.
     pub fn remote_addr(&self) -> Result<IpAddr> {
         let buf = [0u8; 128];
         let ret = unsafe {
@@ -187,6 +249,11 @@ impl<'t, 's> Read for Connection<'t, 's> {
 }
 
 impl<'t> Listener<'t> {
+    /// Accepts a new incoming connection on this listener.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if accepting the connection fails.
     pub fn accept(&self) -> Result<Connection<'t, '_>> {
         let mut out_fd = 0;
         let _ret = unsafe { tailscale_accept(self.ln, &mut out_fd) };
@@ -198,17 +265,23 @@ impl<'t> Listener<'t> {
     }
 }
 
+/// A pair of IPv4 and IPv6 addresses assigned to a Tailscale node.
 #[derive(Debug)]
 pub struct IpPair {
     pub ipv4: Ipv4Addr,
     pub ipv6: Ipv6Addr,
 }
 
+/// A Tailscale networking instance.
+///
+/// This struct represents an active Tailscale node and provides methods
+/// for creating listeners and managing the connection.
 pub struct Tailscale {
     sd: libc::c_int,
 }
 
 impl Tailscale {
+    /// Creates a new builder for configuring a Tailscale instance.
     pub fn builder() -> TailscaleBuilder {
         TailscaleBuilder::default()
     }
@@ -232,12 +305,29 @@ impl Tailscale {
     //     Ok(me)
     // }
 
+    /// Brings up the Tailscale connection.
+    ///
+    /// This must be called before the Tailscale instance can be used for networking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if bringing up the connection fails.
     pub fn up(&self) -> Result<()> {
         let ret = unsafe { tailscale_up(self.sd) };
         self.handle_error(ret)?;
         Ok(())
     }
 
+    /// Creates a new listener on the Tailscale network.
+    ///
+    /// # Arguments
+    ///
+    /// * `network` - The network type (e.g., "tcp")
+    /// * `addr` - The address to listen on (e.g., ":8080")
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if creating the listener fails.
     pub fn listener<'t>(
         &'t self,
         network: &str,
@@ -269,6 +359,13 @@ impl Tailscale {
         })
     }
 
+    /// Returns the IPv4 and IPv6 addresses assigned to this Tailscale node.
+    ///
+    /// Returns `None` if no IP addresses have been assigned yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if retrieving or parsing the IP addresses fails.
     pub fn ips(&self) -> Result<Option<IpPair>> {
         let buf = [0u8; 256];
         let ret = unsafe { tailscale_getips(self.sd, buf.as_ptr() as *mut _, buf.len()) };
