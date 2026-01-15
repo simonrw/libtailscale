@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
 };
 
-use crate::sys::*;
+use crate::sys::legacy::*;
 
 use nix::sys::socket::{ControlMessageOwned, MsgFlags, recvmsg};
 use thiserror::Error;
