@@ -71,7 +71,7 @@ pub type Result<T> = std::result::Result<T, TailscaleError>;
 /// # Examples
 ///
 /// ```no_run
-/// # use libtailscale::Tailscale;
+/// # use tailscale2::Tailscale;
 /// let ts = Tailscale::builder()
 ///     .hostname("my-host")
 ///     .ephemeral(true)
