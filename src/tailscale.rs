@@ -28,6 +28,12 @@ pub enum TailscaleError {
 
     #[error("Failed to set dir")]
     SetDir,
+
+    #[error("Failed to set auth key")]
+    SetAuthKey,
+
+    #[error("Failed to set ephemeral status")]
+    SetEphemeral,
 }
 
 pub type Result<T> = std::result::Result<T, TailscaleError>;
@@ -41,12 +47,20 @@ pub struct TailscaleBuilder {
     ephemeral: bool,
     hostname: Option<String>,
     dir: Option<PathBuf>,
+    auth_key: Option<String>,
 }
 
 impl TailscaleBuilder {
     pub fn build(&self) -> Result<Tailscale> {
         let sd = unsafe { tailscale_new() };
         // TODO: handle if sd is 0
+        if self.ephemeral {
+            let ret = unsafe { tailscale_set_ephemeral(sd, self.ephemeral as _) };
+            if ret != 0 {
+                return Err(TailscaleError::SetEphemeral);
+            }
+        }
+
         if let Some(path) = &self.dir {
             let path_s = path.display().to_string();
             let path_cs = CString::new(path_s)?;
@@ -63,8 +77,21 @@ impl TailscaleBuilder {
                 return Err(TailscaleError::SetHostname);
             }
         }
+        if let Some(auth_key) = &self.auth_key {
+            let c_auth_key = CString::new(auth_key.clone())?;
+            let ret = unsafe { tailscale_set_authkey(sd, c_auth_key.as_ptr()) };
+            if ret != 0 {
+                return Err(TailscaleError::SetAuthKey);
+            }
+        }
 
         Ok(Tailscale { sd })
+    }
+
+    pub fn auth_key(&mut self, key: impl Into<String>) -> &mut Self {
+        let new = self;
+        new.auth_key = Some(key.into());
+        new
     }
 
     pub fn ephemeral(&mut self, ephemeral: bool) -> &mut Self {
