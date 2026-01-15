@@ -1,5 +1,5 @@
 [package]
-name = "libtailscale"
+name = "tailscale2"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,3 +7,7 @@ edition = "2024"
 libc = "0.2.180"
 nix = { version = "0.30.1", features = ["socket", "uio"] }
 thiserror = "2.0.17"
+
+[[bin]]
+name = "echo"
+path = "src/bin/echo.rs"

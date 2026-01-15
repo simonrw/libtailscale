@@ -33,15 +33,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bcc35a38544a891a5f7c865aca548a982ccb3b8650a5b06d0fd33a10283c56fc"
 
 [[package]]
-name = "libtailscale"
-version = "0.1.0"
-dependencies = [
- "libc",
- "nix",
- "thiserror",
-]
-
-[[package]]
 name = "memoffset"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -90,6 +81,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tailscale2"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "nix",
+ "thiserror",
 ]
 
 [[package]]

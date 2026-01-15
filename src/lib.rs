@@ -1,8 +1,5 @@
-use std::io::Read;
+pub use tailscale::*;
 
-use crate::tailscale::Connection;
-
-#[allow(dead_code)]
 mod sys {
 
     pub type TailscaleListener = libc::c_int;
@@ -65,7 +62,7 @@ mod tailscale {
     use std::{
         ffi::NulError,
         io::{IoSliceMut, Read},
-        os::fd::{BorrowedFd, FromRawFd, RawFd},
+        os::fd::{BorrowedFd, RawFd},
         path::PathBuf,
     };
 
@@ -120,18 +117,18 @@ mod tailscale {
         }
 
         pub fn ephemeral(&mut self, ephemeral: bool) -> &mut Self {
-            let mut new = self;
+            let new = self;
             new.ephemeral = ephemeral;
             new
         }
 
         pub fn hostname(&mut self, hostname: impl Into<String>) -> &mut Self {
-            let mut new = self;
+            let new = self;
             new.hostname = Some(hostname.into());
             new
         }
         pub fn dir(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
-            let mut new = self;
+            let new = self;
             new.dir = Some(dir.into());
             new
         }
@@ -284,37 +281,5 @@ mod tailscale {
         fn drop(&mut self) {
             // TODO
         }
-    }
-}
-
-fn handle_connection(mut conn: Connection) {
-    let mut buf = [0u8; 2048];
-    loop {
-        let i = conn.read(&mut buf).unwrap();
-        if i == 0 {
-            eprintln!("connection dropped");
-            break;
-        }
-
-        if let Ok(value) = std::str::from_utf8(&buf[..i]) {
-            println!("{}", value.trim());
-        }
-    }
-}
-
-fn main() {
-    use tailscale::*;
-
-    let ts = Tailscale::builder().ephemeral(true).build().unwrap();
-    ts.up().unwrap();
-
-    let listener = ts.listener("tcp", ":1999").unwrap();
-
-    eprintln!("listening for connections");
-
-    loop {
-        let conn = listener.accept().unwrap();
-        eprintln!("got connection");
-        std::thread::spawn(move || handle_connection(conn));
     }
 }
