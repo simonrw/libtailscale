@@ -226,17 +226,11 @@ impl<'t, 's> Connection<'t, 's> {
 }
 
 impl<'t, 's> Drop for Connection<'t, 's> {
-    #[cfg(unix)]
     fn drop(&mut self) {
         eprintln!("dropping connection");
         if let Err(e) = nix::unistd::close(self.conn) {
             eprintln!("error dropping connection: {e}");
         }
-    }
-
-    #[cfg(not(unix))]
-    fn drop(&mut self) {
-        // TODO
     }
 }
 
@@ -454,16 +448,10 @@ impl Drop for Tailscale {
 }
 
 impl<'t> Drop for Listener<'t> {
-    #[cfg(unix)]
     fn drop(&mut self) {
         eprintln!("dropping listener");
         if let Err(e) = nix::unistd::close(self.ln) {
             eprintln!("Error closing listener: {e}");
         }
-    }
-
-    #[cfg(not(unix))]
-    fn drop(&mut self) {
-        // TODO
     }
 }
