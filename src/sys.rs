@@ -2,7 +2,7 @@ pub type TailscaleListener = libc::c_int;
 pub type TailscaleConn = libc::c_int;
 
 pub mod modern {
-    use super::{TailscaleListener, TailscaleConn};
+    use super::{TailscaleConn, TailscaleListener};
 
     unsafe extern "C" {
         /// Creates a tailscale server object.
@@ -51,7 +51,10 @@ pub mod modern {
         /// For details of each value see the godoc for the fields of tsnet.Server.
         ///
         /// Returns zero on success or -1 on error, call tailscale_errmsg for details.
-        pub fn tailscale_set_hostname(sd: libc::c_int, hostname: *const libc::c_char) -> libc::c_int;
+        pub fn tailscale_set_hostname(
+            sd: libc::c_int,
+            hostname: *const libc::c_char,
+        ) -> libc::c_int;
 
         /// Sets the authentication key.
         ///
@@ -69,7 +72,10 @@ pub mod modern {
         /// For details of each value see the godoc for the fields of tsnet.Server.
         ///
         /// Returns zero on success or -1 on error, call tailscale_errmsg for details.
-        pub fn tailscale_set_control_url(sd: libc::c_int, control_url: *const libc::c_char) -> libc::c_int;
+        pub fn tailscale_set_control_url(
+            sd: libc::c_int,
+            control_url: *const libc::c_char,
+        ) -> libc::c_int;
 
         /// Sets whether the node is ephemeral.
         ///
@@ -98,7 +104,11 @@ pub mod modern {
         /// - 0      - Success
         /// - EBADF  - sd is not a valid tailscale, or l or conn are not valid listeners or connections
         /// - ERANGE - insufficient storage for buf
-        pub fn tailscale_getips(sd: libc::c_int, buf: *mut libc::c_char, buflen: libc::size_t) -> libc::c_int;
+        pub fn tailscale_getips(
+            sd: libc::c_int,
+            buf: *mut libc::c_char,
+            buflen: libc::size_t,
+        ) -> libc::c_int;
 
         /// Connects to the address on the tailnet.
         ///
@@ -160,7 +170,8 @@ pub mod modern {
         /// - 0     - success
         /// - EBADF - listener is not a valid tailscale
         /// - -1    - call tailscale_errmsg for details
-        pub fn tailscale_accept(ln: TailscaleListener, conn_out: *mut TailscaleConn) -> libc::c_int;
+        pub fn tailscale_accept(ln: TailscaleListener, conn_out: *mut TailscaleConn)
+        -> libc::c_int;
 
         /// Starts a loopback address server.
         ///
@@ -218,6 +229,10 @@ pub mod modern {
         /// - 0      - success
         /// - EBADF  - sd is not a valid tailscale
         /// - ERANGE - insufficient storage for buf
-        pub fn tailscale_errmsg(sd: libc::c_int, buf: *mut libc::c_char, buflen: libc::size_t) -> libc::c_int;
+        pub fn tailscale_errmsg(
+            sd: libc::c_int,
+            buf: *mut libc::c_char,
+            buflen: libc::size_t,
+        ) -> libc::c_int;
     }
 }
