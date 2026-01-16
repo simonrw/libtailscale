@@ -11,11 +11,14 @@ use std::{
     os::fd::BorrowedFd,
     path::PathBuf,
     str::{FromStr, Utf8Error},
+    sync::{Arc, Mutex},
+    task::Poll,
 };
 
 use crate::sys::{TailscaleListener, modern::*};
 
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Errors that can occur when working with Tailscale.
 #[derive(Debug, Error)]
@@ -95,7 +98,7 @@ impl TailscaleBuilder {
     /// # Errors
     ///
     /// Returns an error if any of the configuration options fail to be set.
-    pub fn build(&self) -> Result<Tailscale> {
+    pub fn build(&self) -> Result<Arc<Tailscale>> {
         let sd = unsafe { tailscale_new() };
         if sd == 0 {
             return Err(TailscaleError::CreateTailscale);
@@ -132,7 +135,7 @@ impl TailscaleBuilder {
             }
         }
 
-        Ok(Tailscale { sd })
+        Ok(Arc::new(Tailscale { sd }))
     }
 
     /// Sets the authentication key for this Tailscale instance.
@@ -185,9 +188,9 @@ impl TailscaleBuilder {
 /// A Tailscale network listener.
 ///
 /// This listener can accept incoming connections from other nodes on the Tailscale network.
-pub struct Listener<'t> {
+pub struct Listener {
     ln: TailscaleListener,
-    _tailscale: &'t Tailscale,
+    _tailscale: Arc<Tailscale>,
 }
 
 pub type TailscaleConn = libc::c_int;
@@ -195,12 +198,14 @@ pub type TailscaleConn = libc::c_int;
 /// A connection accepted from a Tailscale listener.
 ///
 /// Implements `Read` for reading data from the connection.
-pub struct Connection<'t, 's: 't> {
-    listener: Option<&'t Listener<'s>>,
-    conn: TailscaleConn,
+#[derive(Clone)]
+pub struct Connection {
+    listener: Option<Arc<Listener>>,
+    // TODO: async mutex?
+    conn: Arc<Mutex<TailscaleConn>>,
 }
 
-impl<'t, 's> Connection<'t, 's> {
+impl Connection {
     /// Returns the remote IP address of this connection.
     ///
     /// # Errors
@@ -211,9 +216,11 @@ impl<'t, 's> Connection<'t, 's> {
             return Ok(None);
         };
 
+        // TODO: handle poison
+        let conn = self.conn.lock().unwrap();
         let buf = [0u8; 128];
         let ret = unsafe {
-            tailscale_getremoteaddr(listener.ln, self.conn, buf.as_ptr() as *mut _, buf.len())
+            tailscale_getremoteaddr(listener.ln, *conn, buf.as_ptr() as *mut _, buf.len())
         };
 
         // TODO
@@ -231,25 +238,31 @@ impl<'t, 's> Connection<'t, 's> {
     }
 }
 
-impl<'t, 's> Drop for Connection<'t, 's> {
+impl Drop for Connection {
     fn drop(&mut self) {
         eprintln!("dropping connection");
-        if let Err(e) = nix::unistd::close(self.conn) {
+        // TODO: handle poison
+        let conn = self.conn.lock().unwrap();
+        if let Err(e) = nix::unistd::close(*conn) {
             eprintln!("error dropping connection: {e}");
         }
     }
 }
 
-impl<'t, 's> Read for Connection<'t, 's> {
+impl Read for Connection {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let fd = unsafe { BorrowedFd::borrow_raw(self.conn) };
+        // TODO: handle poison
+        let conn = self.conn.lock().unwrap();
+        let fd = unsafe { BorrowedFd::borrow_raw(*conn) };
         nix::unistd::read(fd, buf).map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
     }
 }
 
-impl<'t, 's> Write for Connection<'t, 's> {
+impl Write for Connection {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let fd = unsafe { BorrowedFd::borrow_raw(self.conn) };
+        // TODO: handle poison
+        let conn = self.conn.lock().unwrap();
+        let fd = unsafe { BorrowedFd::borrow_raw(*conn) };
         nix::unistd::write(fd, buf).map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
     }
 
@@ -258,19 +271,56 @@ impl<'t, 's> Write for Connection<'t, 's> {
     }
 }
 
-impl<'t> Listener<'t> {
+impl AsyncRead for Connection {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        todo!()
+    }
+}
+
+impl AsyncWrite for Connection {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        todo!()
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        todo!()
+    }
+}
+
+impl Listener {
     /// Accepts a new incoming connection on this listener.
     ///
     /// # Errors
     ///
     /// Returns an error if accepting the connection fails.
-    pub fn accept(&self) -> Result<Connection<'t, '_>> {
+    pub async fn accept(self: &Arc<Self>) -> Result<Connection> {
         let mut out_fd = 0;
         let _ret = unsafe { tailscale_accept(self.ln, &mut out_fd) };
         // TODO: handle ret
+
+        let listener = Arc::clone(self);
+
         Ok(Connection {
-            conn: out_fd,
-            listener: Some(self),
+            conn: Arc::new(Mutex::new(out_fd)),
+            listener: Some(listener),
         })
     }
 }
@@ -302,7 +352,7 @@ impl Tailscale {
     /// # Errors
     ///
     /// Returns an error if bringing up the connection fails.
-    pub fn up(&self) -> Result<()> {
+    pub async fn up(&self) -> Result<()> {
         let ret = unsafe { tailscale_up(self.sd) };
         self.handle_error(ret)?;
         Ok(())
@@ -318,12 +368,12 @@ impl Tailscale {
     /// # Errors
     ///
     /// Returns an error if creating the listener fails.
-    pub fn listener<'t>(
-        &'t self,
+    pub fn listener(
+        self: &Arc<Tailscale>,
         network: &str,
         // addr: impl ToSocketAddrs,
         addr: &str,
-    ) -> Result<Listener<'t>> {
+    ) -> Result<Arc<Listener>> {
         let network = std::ffi::CString::new(network).map_err(TailscaleError::Utf8Error)?;
         let addr = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
         // let addr = addr
@@ -343,10 +393,10 @@ impl Tailscale {
             unsafe { tailscale_listen(self.sd, network.as_ptr(), addr.as_ptr(), &mut listener) };
         self.handle_error(ret)?;
 
-        Ok(Listener {
+        Ok(Arc::new(Listener {
             ln: listener,
-            _tailscale: self,
-        })
+            _tailscale: Arc::clone(self),
+        }))
     }
 
     /// Creates an outbound connection to another node on the Tailscale network.
@@ -359,7 +409,7 @@ impl Tailscale {
     /// # Errors
     ///
     /// Returns an error if the connection cannot be established.
-    pub fn connect<'t, 's: 't>(&'t self, network: &str, addr: &str) -> Result<Connection<'t, 's>> {
+    pub fn connect<'t, 's: 't>(&'t self, network: &str, addr: &str) -> Result<Arc<Connection>> {
         let network = std::ffi::CString::new(network).map_err(TailscaleError::Utf8Error)?;
         let addr = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
         let mut conn_fd = 0;
@@ -367,10 +417,10 @@ impl Tailscale {
         let ret = unsafe { tailscale_dial(self.sd, network.as_ptr(), addr.as_ptr(), &mut conn_fd) };
         self.handle_error(ret)?;
 
-        Ok(Connection {
+        Ok(Arc::new(Connection {
             listener: None,
-            conn: conn_fd,
-        })
+            conn: Arc::new(Mutex::new(conn_fd)),
+        }))
     }
 
     /// Returns the IPv4 and IPv6 addresses assigned to this Tailscale node.
@@ -433,7 +483,7 @@ impl Drop for Tailscale {
     }
 }
 
-impl<'t> Drop for Listener<'t> {
+impl Drop for Listener {
     fn drop(&mut self) {
         eprintln!("dropping listener");
         if let Err(e) = nix::unistd::close(self.ln) {
