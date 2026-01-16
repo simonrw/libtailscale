@@ -20,6 +20,9 @@ use thiserror::Error;
 /// Errors that can occur when working with Tailscale.
 #[derive(Debug, Error)]
 pub enum TailscaleError {
+    #[error("failed to create Tailscale instance")]
+    CreateTailscale,
+
     #[error("could not parse address: {0}")]
     AddrParseError(String, AddrParseError),
 
@@ -94,7 +97,10 @@ impl TailscaleBuilder {
     /// Returns an error if any of the configuration options fail to be set.
     pub fn build(&self) -> Result<Tailscale> {
         let sd = unsafe { tailscale_new() };
-        // TODO: handle if sd is 0
+        if sd == 0 {
+            return Err(TailscaleError::CreateTailscale);
+        }
+
         if self.ephemeral {
             let ret = unsafe { tailscale_set_ephemeral(sd, self.ephemeral as _) };
             if ret != 0 {
@@ -289,26 +295,6 @@ impl Tailscale {
     pub fn builder() -> TailscaleBuilder {
         TailscaleBuilder::default()
     }
-    // pub fn new() -> Result<Self> {
-    //     let dir = CString::new("/tmp")?;
-    //     let sd = unsafe { TsnetNewServer() };
-    //
-    //     // TODO: handle if sd is 0
-    //     let ret = unsafe { TsnetSetDir(sd, dir.as_ptr() as *mut _) };
-    //     if ret != 0 {
-    //         panic!("bad");
-    //     }
-    //
-    //     Ok(Self { sd })
-    // }
-
-    // pub fn ephemeral() -> Result<Self> {
-    //     let me = Self::new()?;
-    //     let ret = unsafe { TsnetSetEphemeral(me.sd, 1) };
-    //     me.handle_error(ret)?;
-    //     Ok(me)
-    // }
-
     /// Brings up the Tailscale connection.
     ///
     /// This must be called before the Tailscale instance can be used for networking.
