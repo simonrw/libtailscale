@@ -25,7 +25,7 @@ async fn main() {
         .unwrap();
     ts.up().await.unwrap();
 
-    let listener = ts.listener("tcp", ":1999").unwrap();
+    let listener = ts.listener("tcp", ":1999").await.unwrap();
     eprintln!("listening for connections");
     loop {
         let conn = listener.accept().await.unwrap();
