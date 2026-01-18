@@ -33,7 +33,8 @@
 //!     }
 //! }
 //!
-//! fn main() {
+//! #[tokio::main]
+//! async fn main() {
 //!     // Create and configure a Tailscale instance
 //!     let ts = Tailscale::builder()
 //!         .ephemeral(true)
@@ -42,22 +43,22 @@
 //!         .unwrap();
 //!
 //!     // Bring up the Tailscale connection
-//!     ts.up().unwrap();
+//!     ts.up().await.unwrap();
 //!
 //!     // Create a TCP listener on port 1999
-//!     let listener = ts.listener("tcp", ":1999").unwrap();
+//!     let listener = ts.listener("tcp", ":1999").await.unwrap();
 //!     eprintln!("listening for connections");
 //!
 //!     // Accept and handle connections
-//!     std::thread::scope(|s| {
-//!         loop {
-//!             let conn = listener.accept().unwrap();
-//!             if let Some(addr) = conn.remote_addr().unwrap() {
-//!                 eprintln!("got connection from {}", addr);
-//!             }
-//!             s.spawn(move || handle_connection(conn));
+//!     loop {
+//!         let conn = listener.accept().await.unwrap();
+//!         if let Some(addr) = conn.remote_addr().unwrap() {
+//!             eprintln!("got connection from {}", addr);
 //!         }
-//!     })
+//!         tokio::spawn(async move {
+//!             handle_connection(conn);
+//!         });
+//!     }
 //! }
 //! ```
 //!
