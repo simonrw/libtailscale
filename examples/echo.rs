@@ -1,12 +1,13 @@
 use tailscale2::*;
 use tokio::io::AsyncReadExt;
+use tracing::{info, debug};
 
 async fn handle_connection(mut conn: Connection) {
     let mut buf = [0u8; 2048];
     loop {
         let i = conn.read(&mut buf).await.unwrap();
         if i == 0 {
-            eprintln!("connection dropped");
+            debug!("connection dropped");
             break;
         }
 
@@ -18,6 +19,14 @@ async fn handle_connection(mut conn: Connection) {
 
 #[tokio::main]
 async fn main() {
+    // Initialize tracing subscriber
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+        )
+        .init();
+
     let ts = Tailscale::builder()
         .ephemeral(true)
         .hostname("foo")
@@ -26,11 +35,11 @@ async fn main() {
     ts.up().await.unwrap();
 
     let listener = ts.listener("tcp", ":1999").await.unwrap();
-    eprintln!("listening for connections");
+    info!("listening for connections");
     loop {
         let conn = listener.accept().await.unwrap();
         if let Some(addr) = conn.remote_addr().unwrap() {
-            eprintln!("got connection from {}", addr);
+            info!("got connection from {}", addr);
         }
         // Spawn a new task to handle this connection concurrently
         tokio::spawn(async move {

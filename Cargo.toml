@@ -8,6 +8,8 @@ libc = "0.2.180"
 nix = { version = "0.30.1", features = ["socket", "uio", "fs"] }
 thiserror = "2.0.17"
 tokio = { version = "1.49.0", features = ["io-util", "net", "rt"] }
+tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1.49.0", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -1,9 +1,18 @@
 use std::fs::File;
 use tailscale2::*;
+use tracing::info;
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    println!("=== Tailscale Logging Configuration Demo ===\n");
+    // Initialize tracing subscriber
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+        )
+        .init();
+
+    info!("=== Tailscale Logging Configuration Demo ===\n");
 
     // Example 1: Default logging (no configuration)
     println!("1. Creating Tailscale with default logging...");

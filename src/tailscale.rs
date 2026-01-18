@@ -22,6 +22,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, unix::AsyncFd},
     task::JoinError,
 };
+use tracing::{debug, error};
 
 /// Errors that can occur when working with Tailscale.
 #[derive(Debug, Error)]
@@ -126,12 +127,15 @@ impl TailscaleBuilder {
     ///
     /// Returns an error if any of the configuration options fail to be set.
     pub fn build(&mut self) -> Result<Arc<Tailscale>> {
+        debug!("creating new Tailscale instance");
         let sd = unsafe { tailscale_new() };
         if sd == 0 {
             return Err(TailscaleError::CreateTailscale);
         }
+        debug!(sd, "Tailscale instance created");
 
         if self.ephemeral {
+            debug!("setting ephemeral mode");
             let ret = unsafe { tailscale_set_ephemeral(sd, self.ephemeral as _) };
             if ret != 0 {
                 return Err(TailscaleError::SetEphemeral);
@@ -139,6 +143,7 @@ impl TailscaleBuilder {
         }
 
         if let Some(path) = &self.dir {
+            debug!(path = %path.display(), "setting state directory");
             let path_s = path.display().to_string();
             let path_cs = CString::new(path_s)?;
             let ret = unsafe { tailscale_set_dir(sd, path_cs.as_ptr() as *mut _) };
@@ -148,6 +153,7 @@ impl TailscaleBuilder {
         };
 
         if let Some(hostname) = &self.hostname {
+            debug!(%hostname, "setting hostname");
             let c_hostname = CString::new(hostname.clone())?;
             let ret = unsafe { tailscale_set_hostname(sd, c_hostname.as_ptr()) };
             if ret != 0 {
@@ -155,6 +161,7 @@ impl TailscaleBuilder {
             }
         }
         if let Some(auth_key) = &self.auth_key {
+            debug!("setting auth key");
             let c_auth_key = CString::new(auth_key.clone())?;
             let ret = unsafe { tailscale_set_authkey(sd, c_auth_key.as_ptr()) };
             if ret != 0 {
@@ -165,11 +172,13 @@ impl TailscaleBuilder {
         // Handle log configuration
         let log_fd = match std::mem::take(&mut self.log_config) {
             LogConfig::Default => {
+                debug!("using default Tailscale logging");
                 // Don't call tailscale_set_logfd, use default logging
                 None
             }
             LogConfig::Fd(owned_fd) => {
                 let fd = owned_fd.as_raw_fd();
+                debug!(fd, "setting custom log destination");
                 let ret = unsafe { tailscale_set_logfd(sd, fd) };
                 if ret != 0 {
                     return Err(TailscaleError::SetLogFd);
@@ -177,6 +186,7 @@ impl TailscaleBuilder {
                 Some(owned_fd)
             }
             LogConfig::Discard => {
+                debug!("disabling Tailscale logging");
                 let ret = unsafe { tailscale_set_logfd(sd, -1) };
                 if ret != 0 {
                     return Err(TailscaleError::SetLogFd);
@@ -185,6 +195,7 @@ impl TailscaleBuilder {
             }
         };
 
+        debug!("Tailscale instance built successfully");
         Ok(Arc::new(Tailscale { sd, _log_fd: log_fd }))
     }
 
@@ -322,7 +333,7 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        eprintln!("dropping connection");
+        debug!("dropping connection");
         // AsyncFd<OwnedFd> automatically closes the fd on drop
     }
 }
@@ -440,6 +451,7 @@ impl Listener {
     ///
     /// Returns an error if accepting the connection fails.
     pub async fn accept(self: &Arc<Self>) -> Result<Connection> {
+        debug!(fd = self.ln, "waiting to accept connection");
         let ln = self.ln;
 
         // Use spawn_blocking to run the blocking C call
@@ -452,6 +464,7 @@ impl Listener {
         .map_err(TailscaleError::SpawnBlockingFailed)?;
 
         self._tailscale.handle_error(ret)?;
+        debug!(fd = out_fd, "accepted connection");
 
         // Set the fd to non-blocking mode
         let borrowed_fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(out_fd) };
@@ -508,6 +521,7 @@ impl Tailscale {
     ///
     /// Returns an error if bringing up the connection fails.
     pub async fn up(&self) -> Result<()> {
+        debug!("bringing up Tailscale connection");
         let sd = self.sd;
 
         // Use spawn_blocking for the blocking C call
@@ -516,6 +530,7 @@ impl Tailscale {
             .map_err(TailscaleError::SpawnBlockingFailed)?;
 
         self.handle_error(ret)?;
+        debug!("Tailscale connection is up");
         Ok(())
     }
 
@@ -535,6 +550,7 @@ impl Tailscale {
         // addr: impl ToSocketAddrs,
         addr: &str,
     ) -> Result<Arc<Listener>> {
+        debug!(%network, %addr, "creating listener");
         let network = std::ffi::CString::new(network).map_err(TailscaleError::Utf8Error)?;
         let addr = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
         let sd = self.sd;
@@ -550,6 +566,7 @@ impl Tailscale {
         .map_err(TailscaleError::SpawnBlockingFailed)?;
 
         self.handle_error(ret)?;
+        debug!(fd = listener, "listener created");
 
         Ok(Arc::new(Listener {
             ln: listener,
@@ -568,6 +585,7 @@ impl Tailscale {
     ///
     /// Returns an error if the connection cannot be established.
     pub async fn connect(&self, network: &str, addr: &str) -> Result<Connection> {
+        debug!(%network, %addr, "connecting");
         let network = std::ffi::CString::new(network).map_err(TailscaleError::Utf8Error)?;
         let addr = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
         let sd = self.sd;
@@ -582,6 +600,7 @@ impl Tailscale {
         .map_err(TailscaleError::SpawnBlockingFailed)?;
 
         self.handle_error(ret)?;
+        debug!(fd = conn_fd, "connection established");
 
         // Set the fd to non-blocking mode
         let borrowed_fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(conn_fd) };
@@ -661,19 +680,19 @@ impl Tailscale {
 
 impl Drop for Tailscale {
     fn drop(&mut self) {
-        eprintln!("dropping server");
+        debug!("dropping server");
         let ret = unsafe { tailscale_close(self.sd) };
         if let Err(e) = self.handle_error(ret) {
-            eprintln!("error dropping tailscale: {e}");
+            error!(error = %e, "error dropping tailscale");
         }
     }
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        eprintln!("dropping listener");
+        debug!("dropping listener");
         if let Err(e) = nix::unistd::close(self.ln) {
-            eprintln!("Error closing listener: {e}");
+            error!(error = %e, "error closing listener");
         }
     }
 }
