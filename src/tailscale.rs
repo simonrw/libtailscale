@@ -308,10 +308,7 @@ impl Connection {
             tailscale_getremoteaddr(listener.ln, conn_fd, buf.as_ptr() as *mut _, buf.len())
         };
 
-        // TODO
-        if ret > 0 {
-            panic!("handle return value");
-        }
+        listener._tailscale.handle_error(ret)?;
 
         let s = CStr::from_bytes_until_nul(&buf[..])?;
         let s = s.to_str()?;
@@ -651,7 +648,10 @@ impl Tailscale {
         let buf = [0u8; 2048];
         let ret = unsafe { tailscale_errmsg(self.sd, buf.as_ptr() as *mut _, buf.len()) };
         if ret > 0 {
-            todo!("error with fetching error message: {ret}")
+            return Err(TailscaleError::Tailscale(format!(
+                "Failed to retrieve error message (error code: {})",
+                ret
+            )));
         }
         let s = CStr::from_bytes_until_nul(&buf[..])?;
         let s = s.to_str()?;
