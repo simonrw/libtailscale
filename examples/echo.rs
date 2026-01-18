@@ -32,6 +32,9 @@ async fn main() {
         if let Some(addr) = conn.remote_addr().unwrap() {
             eprintln!("got connection from {}", addr);
         }
-        handle_connection(conn).await;
+        // Spawn a new task to handle this connection concurrently
+        tokio::spawn(async move {
+            handle_connection(conn).await;
+        });
     }
 }

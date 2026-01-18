@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use tailscale2::*;
 use tokio::io::AsyncWriteExt;
 
@@ -12,9 +10,9 @@ async fn main() {
         .unwrap();
     ts.up().await.unwrap();
 
-    let mut conn = ts.connect("tcp", "mm:8000").unwrap();
+    let mut conn = ts.connect("tcp", "mm:8000").await.unwrap();
     println!("connection established");
 
     let text = "hello".to_string().into_bytes();
-    Arc::make_mut(&mut conn).write_all(&text).await.unwrap();
+    conn.write_all(&text).await.unwrap();
 }

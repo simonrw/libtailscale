@@ -8,17 +8,17 @@ use std::{
     ffi::{CStr, CString, FromBytesUntilNulError, NulError},
     io::{Read, Write},
     net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr},
-    os::fd::BorrowedFd,
+    os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
     path::PathBuf,
     str::{FromStr, Utf8Error},
-    sync::{Arc, Mutex},
+    sync::Arc,
     task::Poll,
 };
 
 use crate::sys::{TailscaleListener, modern::*};
 
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{unix::AsyncFd, AsyncRead, AsyncWrite};
 
 /// Errors that can occur when working with Tailscale.
 #[derive(Debug, Error)]
@@ -197,12 +197,10 @@ pub type TailscaleConn = libc::c_int;
 
 /// A connection accepted from a Tailscale listener.
 ///
-/// Implements `Read` for reading data from the connection.
-#[derive(Clone)]
+/// Implements `AsyncRead` and `AsyncWrite` for async I/O.
 pub struct Connection {
     listener: Option<Arc<Listener>>,
-    // TODO: async mutex?
-    conn: Arc<Mutex<TailscaleConn>>,
+    conn: AsyncFd<OwnedFd>,
 }
 
 impl Connection {
@@ -216,11 +214,10 @@ impl Connection {
             return Ok(None);
         };
 
-        // TODO: handle poison
-        let conn = self.conn.lock().unwrap();
+        let conn_fd = self.conn.as_raw_fd();
         let buf = [0u8; 128];
         let ret = unsafe {
-            tailscale_getremoteaddr(listener.ln, *conn, buf.as_ptr() as *mut _, buf.len())
+            tailscale_getremoteaddr(listener.ln, conn_fd, buf.as_ptr() as *mut _, buf.len())
         };
 
         // TODO
@@ -241,28 +238,20 @@ impl Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         eprintln!("dropping connection");
-        // TODO: handle poison
-        let conn = self.conn.lock().unwrap();
-        if let Err(e) = nix::unistd::close(*conn) {
-            eprintln!("error dropping connection: {e}");
-        }
+        // AsyncFd<OwnedFd> automatically closes the fd on drop
     }
 }
 
 impl Read for Connection {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        // TODO: handle poison
-        let conn = self.conn.lock().unwrap();
-        let fd = unsafe { BorrowedFd::borrow_raw(*conn) };
+        let fd = self.conn.get_ref().as_fd();
         nix::unistd::read(fd, buf).map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
     }
 }
 
 impl Write for Connection {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        // TODO: handle poison
-        let conn = self.conn.lock().unwrap();
-        let fd = unsafe { BorrowedFd::borrow_raw(*conn) };
+        let fd = self.conn.get_ref().as_fd();
         nix::unistd::write(fd, buf).map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
     }
 
@@ -277,7 +266,42 @@ impl AsyncRead for Connection {
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        todo!()
+        loop {
+            let mut guard = match self.conn.poll_read_ready(cx) {
+                Poll::Ready(Ok(guard)) => guard,
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Pending => return Poll::Pending,
+            };
+
+            let fd = self.conn.get_ref().as_fd();
+
+            // Safety: We're reading into the unfilled portion of the buffer
+            // and will call assume_init and advance after a successful read
+            let unfilled = unsafe {
+                let slice = buf.unfilled_mut();
+                std::slice::from_raw_parts_mut(
+                    slice.as_mut_ptr() as *mut u8,
+                    slice.len()
+                )
+            };
+
+            match nix::unistd::read(fd, unfilled) {
+                Ok(n) => {
+                    unsafe {
+                        buf.assume_init(n);
+                    }
+                    buf.advance(n);
+                    return Poll::Ready(Ok(()));
+                }
+                Err(nix::errno::Errno::EWOULDBLOCK) => {
+                    guard.clear_ready();
+                    continue;
+                }
+                Err(e) => {
+                    return Poll::Ready(Err(std::io::Error::from_raw_os_error(e as i32)));
+                }
+            }
+        }
     }
 }
 
@@ -287,7 +311,28 @@ impl AsyncWrite for Connection {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
-        todo!()
+        loop {
+            let mut guard = match self.conn.poll_write_ready(cx) {
+                Poll::Ready(Ok(guard)) => guard,
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Pending => return Poll::Pending,
+            };
+
+            let fd = self.conn.get_ref().as_fd();
+
+            match nix::unistd::write(fd, buf) {
+                Ok(n) => {
+                    return Poll::Ready(Ok(n));
+                }
+                Err(nix::errno::Errno::EWOULDBLOCK) => {
+                    guard.clear_ready();
+                    continue;
+                }
+                Err(e) => {
+                    return Poll::Ready(Err(std::io::Error::from_raw_os_error(e as i32)));
+                }
+            }
+        }
     }
 
     fn poll_flush(
@@ -299,9 +344,10 @@ impl AsyncWrite for Connection {
 
     fn poll_shutdown(
         self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        todo!()
+        // For TCP connections, shutdown is typically a no-op or uses the Drop impl
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -312,14 +358,45 @@ impl Listener {
     ///
     /// Returns an error if accepting the connection fails.
     pub async fn accept(self: &Arc<Self>) -> Result<Connection> {
-        let mut out_fd = 0;
-        let _ret = unsafe { tailscale_accept(self.ln, &mut out_fd) };
-        // TODO: handle ret
+        let ln = self.ln;
+
+        // Use spawn_blocking to run the blocking C call
+        let out_fd = tokio::task::spawn_blocking(move || {
+            let mut out_fd = 0;
+            let ret = unsafe { tailscale_accept(ln, &mut out_fd) };
+            if ret != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "tailscale_accept failed",
+                ));
+            }
+            Ok(out_fd)
+        })
+        .await
+        .map_err(|e| TailscaleError::Tailscale(format!("spawn_blocking failed: {}", e)))?
+        .map_err(|e| TailscaleError::Tailscale(format!("accept failed: {}", e)))?;
+
+        // Set the fd to non-blocking mode
+        let borrowed_fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(out_fd) };
+        let flags = nix::fcntl::OFlag::from_bits_truncate(
+            nix::fcntl::fcntl(&borrowed_fd, nix::fcntl::FcntlArg::F_GETFL)
+                .map_err(|e| TailscaleError::Tailscale(format!("F_GETFL failed: {}", e)))?,
+        );
+        nix::fcntl::fcntl(
+            &borrowed_fd,
+            nix::fcntl::FcntlArg::F_SETFL(flags | nix::fcntl::OFlag::O_NONBLOCK),
+        )
+        .map_err(|e| TailscaleError::Tailscale(format!("F_SETFL failed: {}", e)))?;
+
+        // Convert raw fd to OwnedFd and wrap in AsyncFd
+        let owned_fd = unsafe { OwnedFd::from_raw_fd(out_fd) };
+        let async_fd = AsyncFd::new(owned_fd)
+            .map_err(|e| TailscaleError::Tailscale(format!("AsyncFd::new failed: {}", e)))?;
 
         let listener = Arc::clone(self);
 
         Ok(Connection {
-            conn: Arc::new(Mutex::new(out_fd)),
+            conn: async_fd,
             listener: Some(listener),
         })
     }
@@ -353,7 +430,13 @@ impl Tailscale {
     ///
     /// Returns an error if bringing up the connection fails.
     pub async fn up(&self) -> Result<()> {
-        let ret = unsafe { tailscale_up(self.sd) };
+        let sd = self.sd;
+
+        // Use spawn_blocking for the blocking C call
+        let ret = tokio::task::spawn_blocking(move || unsafe { tailscale_up(sd) })
+            .await
+            .map_err(|e| TailscaleError::Tailscale(format!("spawn_blocking failed: {}", e)))?;
+
         self.handle_error(ret)?;
         Ok(())
     }
@@ -409,18 +492,48 @@ impl Tailscale {
     /// # Errors
     ///
     /// Returns an error if the connection cannot be established.
-    pub fn connect<'t, 's: 't>(&'t self, network: &str, addr: &str) -> Result<Arc<Connection>> {
+    pub async fn connect(&self, network: &str, addr: &str) -> Result<Connection> {
         let network = std::ffi::CString::new(network).map_err(TailscaleError::Utf8Error)?;
         let addr = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
-        let mut conn_fd = 0;
+        let sd = self.sd;
 
-        let ret = unsafe { tailscale_dial(self.sd, network.as_ptr(), addr.as_ptr(), &mut conn_fd) };
-        self.handle_error(ret)?;
+        // Use spawn_blocking for the blocking C call
+        let conn_fd = tokio::task::spawn_blocking(move || {
+            let mut conn_fd = 0;
+            let ret = unsafe { tailscale_dial(sd, network.as_ptr(), addr.as_ptr(), &mut conn_fd) };
+            if ret != 0 {
+                return Err(ret);
+            }
+            Ok(conn_fd)
+        })
+        .await
+        .map_err(|e| TailscaleError::Tailscale(format!("spawn_blocking failed: {}", e)))?
+        .map_err(|ret| {
+            // We can't call handle_error here because we don't have self
+            TailscaleError::Tailscale(format!("tailscale_dial failed with code: {}", ret))
+        })?;
 
-        Ok(Arc::new(Connection {
+        // Set the fd to non-blocking mode
+        let borrowed_fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(conn_fd) };
+        let flags = nix::fcntl::OFlag::from_bits_truncate(
+            nix::fcntl::fcntl(&borrowed_fd, nix::fcntl::FcntlArg::F_GETFL)
+                .map_err(|e| TailscaleError::Tailscale(format!("F_GETFL failed: {}", e)))?,
+        );
+        nix::fcntl::fcntl(
+            &borrowed_fd,
+            nix::fcntl::FcntlArg::F_SETFL(flags | nix::fcntl::OFlag::O_NONBLOCK),
+        )
+        .map_err(|e| TailscaleError::Tailscale(format!("F_SETFL failed: {}", e)))?;
+
+        // Convert raw fd to OwnedFd and wrap in AsyncFd
+        let owned_fd = unsafe { OwnedFd::from_raw_fd(conn_fd) };
+        let async_fd = AsyncFd::new(owned_fd)
+            .map_err(|e| TailscaleError::Tailscale(format!("AsyncFd::new failed: {}", e)))?;
+
+        Ok(Connection {
             listener: None,
-            conn: Arc::new(Mutex::new(conn_fd)),
-        }))
+            conn: async_fd,
+        })
     }
 
     /// Returns the IPv4 and IPv6 addresses assigned to this Tailscale node.
