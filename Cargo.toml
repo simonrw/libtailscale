@@ -1,0 +1,13 @@
+[package]
+name = "tailscale2"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libc = "0.2.180"
+nix = { version = "0.30.1", features = ["socket", "uio", "fs"] }
+thiserror = "2.0.17"
+tokio = { version = "1.49.0", features = ["io-util", "net", "rt"] }
+
+[dev-dependencies]
+tokio = { version = "1.49.0", features = ["full"] }
