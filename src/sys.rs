@@ -72,6 +72,7 @@ pub mod modern {
         /// For details of each value see the godoc for the fields of tsnet.Server.
         ///
         /// Returns zero on success or -1 on error, call tailscale_errmsg for details.
+        #[allow(dead_code)]
         pub fn tailscale_set_control_url(
             sd: libc::c_int,
             control_url: *const libc::c_char,
@@ -194,6 +195,7 @@ pub mod modern {
         /// and local_api_cred_out are all NUL-terminated.
         ///
         /// Returns zero on success or -1 on error, call tailscale_errmsg for details.
+        #[allow(dead_code)]
         pub fn tailscale_loopback(
             sd: libc::c_int,
             addr_out: *mut libc::c_char,
@@ -216,6 +218,7 @@ pub mod modern {
         /// Returns:
         /// - 0  - success
         /// - -1 - other error, details printed to the tsnet logger
+        #[allow(dead_code)]
         pub fn tailscale_enable_funnel_to_localhost_plaintext_http1(
             sd: libc::c_int,
             localhost_port: libc::c_int,

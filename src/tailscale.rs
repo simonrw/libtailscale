@@ -68,12 +68,32 @@ pub enum TailscaleError {
     #[error("Failed to set ephemeral status")]
     SetEphemeral,
 
+    #[error("Failed to set log destination")]
+    SetLogFd,
+
     #[error("tailscale error: {0}")]
     Tailscale(String),
 }
 
 /// A specialized `Result` type for Tailscale operations.
 pub type Result<T> = std::result::Result<T, TailscaleError>;
+
+/// Configuration for Tailscale logging output.
+pub enum LogConfig {
+    /// Use Tailscale's default logging behavior.
+    Default,
+    /// Write logs to a custom log destination.
+    /// The log destination will be owned and kept alive for the Tailscale instance lifetime.
+    Fd(OwnedFd),
+    /// Discard all log output.
+    Discard,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        LogConfig::Default
+    }
+}
 
 /// Builder for configuring and creating a Tailscale instance.
 ///
@@ -90,12 +110,13 @@ pub type Result<T> = std::result::Result<T, TailscaleError>;
 ///     .build()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct TailscaleBuilder {
     ephemeral: bool,
     hostname: Option<String>,
     dir: Option<PathBuf>,
     auth_key: Option<String>,
+    log_config: LogConfig,
 }
 
 impl TailscaleBuilder {
@@ -104,7 +125,7 @@ impl TailscaleBuilder {
     /// # Errors
     ///
     /// Returns an error if any of the configuration options fail to be set.
-    pub fn build(&self) -> Result<Arc<Tailscale>> {
+    pub fn build(&mut self) -> Result<Arc<Tailscale>> {
         let sd = unsafe { tailscale_new() };
         if sd == 0 {
             return Err(TailscaleError::CreateTailscale);
@@ -141,7 +162,30 @@ impl TailscaleBuilder {
             }
         }
 
-        Ok(Arc::new(Tailscale { sd }))
+        // Handle log configuration
+        let log_fd = match std::mem::take(&mut self.log_config) {
+            LogConfig::Default => {
+                // Don't call tailscale_set_logfd, use default logging
+                None
+            }
+            LogConfig::Fd(owned_fd) => {
+                let fd = owned_fd.as_raw_fd();
+                let ret = unsafe { tailscale_set_logfd(sd, fd) };
+                if ret != 0 {
+                    return Err(TailscaleError::SetLogFd);
+                }
+                Some(owned_fd)
+            }
+            LogConfig::Discard => {
+                let ret = unsafe { tailscale_set_logfd(sd, -1) };
+                if ret != 0 {
+                    return Err(TailscaleError::SetLogFd);
+                }
+                None
+            }
+        };
+
+        Ok(Arc::new(Tailscale { sd, _log_fd: log_fd }))
     }
 
     /// Sets the authentication key for this Tailscale instance.
@@ -188,6 +232,44 @@ impl TailscaleBuilder {
         let new = self;
         new.dir = Some(dir.into());
         new
+    }
+
+    /// Sets a custom log destination for Tailscale logging output.
+    ///
+    /// # Arguments
+    ///
+    /// * `destination` - A log destination that implements `AsRawFd` (e.g., `File`, `OwnedFd`)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use std::fs::File;
+    /// # use tailscale2::Tailscale;
+    /// let log_file = File::create("/tmp/tailscale.log")?;
+    /// let ts = Tailscale::builder()
+    ///     .log_destination(log_file)
+    ///     .build()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn log_destination(&mut self, destination: impl Into<OwnedFd>) -> &mut Self {
+        self.log_config = LogConfig::Fd(destination.into());
+        self
+    }
+
+    /// Disables all Tailscale logging output.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use tailscale2::Tailscale;
+    /// let ts = Tailscale::builder()
+    ///     .log_discard()
+    ///     .build()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn log_discard(&mut self) -> &mut Self {
+        self.log_config = LogConfig::Discard;
+        self
     }
 }
 
@@ -377,11 +459,11 @@ impl Listener {
         // Set the fd to non-blocking mode
         let borrowed_fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(out_fd) };
         let flags = nix::fcntl::OFlag::from_bits_truncate(
-            nix::fcntl::fcntl(&borrowed_fd, nix::fcntl::FcntlArg::F_GETFL)
+            nix::fcntl::fcntl(borrowed_fd, nix::fcntl::FcntlArg::F_GETFL)
                 .map_err(|e| TailscaleError::Tailscale(format!("F_GETFL failed: {}", e)))?,
         );
         nix::fcntl::fcntl(
-            &borrowed_fd,
+            borrowed_fd,
             nix::fcntl::FcntlArg::F_SETFL(flags | nix::fcntl::OFlag::O_NONBLOCK),
         )
         .map_err(|e| TailscaleError::Tailscale(format!("F_SETFL failed: {}", e)))?;
@@ -413,6 +495,7 @@ pub struct IpPair {
 /// for creating listeners and managing the connection.
 pub struct Tailscale {
     sd: libc::c_int,
+    _log_fd: Option<OwnedFd>,
 }
 
 impl Tailscale {
@@ -506,11 +589,11 @@ impl Tailscale {
         // Set the fd to non-blocking mode
         let borrowed_fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(conn_fd) };
         let flags = nix::fcntl::OFlag::from_bits_truncate(
-            nix::fcntl::fcntl(&borrowed_fd, nix::fcntl::FcntlArg::F_GETFL)
+            nix::fcntl::fcntl(borrowed_fd, nix::fcntl::FcntlArg::F_GETFL)
                 .map_err(|e| TailscaleError::Tailscale(format!("F_GETFL failed: {}", e)))?,
         );
         nix::fcntl::fcntl(
-            &borrowed_fd,
+            borrowed_fd,
             nix::fcntl::FcntlArg::F_SETFL(flags | nix::fcntl::OFlag::O_NONBLOCK),
         )
         .map_err(|e| TailscaleError::Tailscale(format!("F_SETFL failed: {}", e)))?;
