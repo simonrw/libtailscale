@@ -17,6 +17,9 @@ libtailscale_ios_sim_x86_64.a:
 .PHONY: c-archive-ios
 c-archive-ios: libtailscale_ios.a  ## Builds libtailscale_ios.a for iOS (iOS SDK required)
 
+.PHONY: build
+build: libtailscale2.a  ## Build the Rust development archive
+
 libtailscale2.a: libtailscale.a scratch/tailscale.o
 	cp libtailscale.a scratch
 	cd scratch && ar -x libtailscale.a
