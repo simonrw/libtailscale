@@ -18,13 +18,19 @@ use std::{
 use crate::sys::{TailscaleListener, modern::*};
 
 use thiserror::Error;
-use tokio::io::{unix::AsyncFd, AsyncRead, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, unix::AsyncFd},
+    task::JoinError,
+};
 
 /// Errors that can occur when working with Tailscale.
 #[derive(Debug, Error)]
 pub enum TailscaleError {
     #[error("failed to create Tailscale instance")]
     CreateTailscale,
+
+    #[error("spawning background thread failed")]
+    SpawnBlockingFailed(#[from] JoinError),
 
     #[error("could not parse address: {0}")]
     AddrParseError(String, AddrParseError),
@@ -279,10 +285,7 @@ impl AsyncRead for Connection {
             // and will call assume_init and advance after a successful read
             let unfilled = unsafe {
                 let slice = buf.unfilled_mut();
-                std::slice::from_raw_parts_mut(
-                    slice.as_mut_ptr() as *mut u8,
-                    slice.len()
-                )
+                std::slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut u8, slice.len())
             };
 
             match nix::unistd::read(fd, unfilled) {
@@ -361,20 +364,15 @@ impl Listener {
         let ln = self.ln;
 
         // Use spawn_blocking to run the blocking C call
-        let out_fd = tokio::task::spawn_blocking(move || {
+        let (out_fd, ret) = tokio::task::spawn_blocking(move || {
             let mut out_fd = 0;
             let ret = unsafe { tailscale_accept(ln, &mut out_fd) };
-            if ret != 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "tailscale_accept failed",
-                ));
-            }
-            Ok(out_fd)
+            (out_fd, ret)
         })
         .await
-        .map_err(|e| TailscaleError::Tailscale(format!("spawn_blocking failed: {}", e)))?
-        .map_err(|e| TailscaleError::Tailscale(format!("accept failed: {}", e)))?;
+        .map_err(TailscaleError::SpawnBlockingFailed)?;
+
+        self._tailscale.handle_error(ret)?;
 
         // Set the fd to non-blocking mode
         let borrowed_fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(out_fd) };
@@ -435,7 +433,7 @@ impl Tailscale {
         // Use spawn_blocking for the blocking C call
         let ret = tokio::task::spawn_blocking(move || unsafe { tailscale_up(sd) })
             .await
-            .map_err(|e| TailscaleError::Tailscale(format!("spawn_blocking failed: {}", e)))?;
+            .map_err(TailscaleError::SpawnBlockingFailed)?;
 
         self.handle_error(ret)?;
         Ok(())
@@ -451,7 +449,7 @@ impl Tailscale {
     /// # Errors
     ///
     /// Returns an error if creating the listener fails.
-    pub fn listener(
+    pub async fn listener(
         self: &Arc<Tailscale>,
         network: &str,
         // addr: impl ToSocketAddrs,
@@ -459,21 +457,18 @@ impl Tailscale {
     ) -> Result<Arc<Listener>> {
         let network = std::ffi::CString::new(network).map_err(TailscaleError::Utf8Error)?;
         let addr = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
-        // let addr = addr
-        //     .to_socket_addrs()
-        //     .map_err(TailscaleError::InvalidAddress)?
-        //     .next()
-        //     .ok_or_else(|| {
-        //         TailscaleError::InvalidAddress(std::io::Error::new(
-        //             std::io::ErrorKind::Other,
-        //             "invalid address",
-        //         ))
-        //     })?;
+        let sd = self.sd;
 
-        let mut listener = 0;
+        // Use spawn_blocking for the blocking C call
+        let (listener, ret) = tokio::task::spawn_blocking(move || {
+            let mut listener = 0;
+            let ret =
+                unsafe { tailscale_listen(sd, network.as_ptr(), addr.as_ptr(), &mut listener) };
+            (listener, ret)
+        })
+        .await
+        .map_err(TailscaleError::SpawnBlockingFailed)?;
 
-        let ret =
-            unsafe { tailscale_listen(self.sd, network.as_ptr(), addr.as_ptr(), &mut listener) };
         self.handle_error(ret)?;
 
         Ok(Arc::new(Listener {
@@ -498,20 +493,15 @@ impl Tailscale {
         let sd = self.sd;
 
         // Use spawn_blocking for the blocking C call
-        let conn_fd = tokio::task::spawn_blocking(move || {
+        let (conn_fd, ret) = tokio::task::spawn_blocking(move || {
             let mut conn_fd = 0;
             let ret = unsafe { tailscale_dial(sd, network.as_ptr(), addr.as_ptr(), &mut conn_fd) };
-            if ret != 0 {
-                return Err(ret);
-            }
-            Ok(conn_fd)
+            (conn_fd, ret)
         })
         .await
-        .map_err(|e| TailscaleError::Tailscale(format!("spawn_blocking failed: {}", e)))?
-        .map_err(|ret| {
-            // We can't call handle_error here because we don't have self
-            TailscaleError::Tailscale(format!("tailscale_dial failed with code: {}", ret))
-        })?;
+        .map_err(TailscaleError::SpawnBlockingFailed)?;
+
+        self.handle_error(ret)?;
 
         // Set the fd to non-blocking mode
         let borrowed_fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(conn_fd) };
