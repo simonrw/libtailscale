@@ -19,7 +19,7 @@ async fn main() {
         .unwrap();
     ts.up().await.unwrap();
 
-    let mut conn = ts.connect("tcp", "mm:8000").await.unwrap();
+    let mut conn = ts.connect(NetworkType::Tcp, "mm:8000").await.unwrap();
     info!("connection established");
 
     let text = "hello".to_string().into_bytes();

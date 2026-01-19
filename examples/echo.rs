@@ -34,7 +34,7 @@ async fn main() {
         .unwrap();
     ts.up().await.unwrap();
 
-    let listener = ts.listener("tcp", ":1999").await.unwrap();
+    let listener = ts.listener(NetworkType::Tcp, ":1999").await.unwrap();
     info!("listening for connections");
     loop {
         let conn = listener.accept().await.unwrap();
