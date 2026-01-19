@@ -360,7 +360,10 @@ impl Connection {
             tailscale_getremoteaddr(listener.ln, conn_fd, buf.as_ptr() as *mut _, buf.len())
         };
 
-        listener._tailscale.handle_error(ret)?;
+        if ret != 0 {
+            let error_message = listener._tailscale.get_error_message()?;
+            return Err(TailscaleError::Tailscale(error_message));
+        }
 
         let s = CStr::from_bytes_until_nul(&buf[..])?;
         let s = s.to_str()?;
@@ -697,7 +700,10 @@ impl Tailscale {
     pub fn ips(&self) -> Result<Option<IpPair>> {
         let buf = [0u8; 256];
         let ret = unsafe { tailscale_getips(self.sd, buf.as_ptr() as *mut _, buf.len()) };
-        self.handle_error(ret)?;
+        if ret != 0 {
+            let error_message = self.get_error_message()?;
+            return Err(TailscaleError::Tailscale(error_message));
+        }
         let s = CStr::from_bytes_until_nul(&buf[..])?;
         let s = s.to_str()?;
 
@@ -715,14 +721,6 @@ impl Tailscale {
             .map_err(|e| TailscaleError::AddrParseError(ipv6.to_string(), e))?;
 
         Ok(Some(IpPair { ipv4, ipv6 }))
-    }
-
-    fn handle_error(&self, value: libc::c_int) -> Result<()> {
-        if value > 0 {
-            let error_message = self.get_error_message()?;
-            return Err(TailscaleError::Tailscale(error_message));
-        }
-        Ok(())
     }
 
     fn get_error_message(&self) -> Result<String> {
@@ -744,8 +742,12 @@ impl Drop for Tailscale {
     fn drop(&mut self) {
         debug!("dropping server");
         let ret = unsafe { tailscale_close(self.sd) };
-        if let Err(e) = self.handle_error(ret) {
-            error!(error = %e, "error dropping tailscale");
+        if ret != 0 {
+            if let Ok(error_message) = self.get_error_message() {
+                error!(error = %error_message, "error dropping tailscale");
+            } else {
+                error!("error dropping tailscale (failed to retrieve error message)");
+            }
         }
     }
 }
