@@ -1,5 +1,7 @@
 # libtailscale Rust Bindings
 
+**Note:** This project is a fork of the original libtailscale. All pull requests should target the repository at [github.com/simonrw/libtailscale](https://github.com/simonrw/libtailscale).
+
 This document provides documentation for the Rust bindings for libtailscale, located in the `src/` directory.
 
 ## Overview
