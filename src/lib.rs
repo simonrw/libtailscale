@@ -46,7 +46,7 @@
 //!     ts.up().await.unwrap();
 //!
 //!     // Create a TCP listener on port 1999
-//!     let listener = ts.listener("tcp", ":1999").await.unwrap();
+//!     let listener = ts.listener(NetworkType::Tcp, ":1999").await.unwrap();
 //!     eprintln!("listening for connections");
 //!
 //!     // Accept and handle connections

@@ -24,6 +24,31 @@ use tokio::{
 };
 use tracing::{debug, error};
 
+/// Network protocol type for Tailscale connections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkType {
+    /// TCP protocol
+    Tcp,
+    /// UDP protocol
+    Udp,
+}
+
+impl NetworkType {
+    /// Returns the string representation of the network type.
+    fn as_str(&self) -> &'static str {
+        match self {
+            NetworkType::Tcp => "tcp",
+            NetworkType::Udp => "udp",
+        }
+    }
+}
+
+impl std::fmt::Display for NetworkType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Errors that can occur when working with Tailscale.
 #[derive(Debug, Error)]
 pub enum TailscaleError {
@@ -71,6 +96,26 @@ pub enum TailscaleError {
 
     #[error("Failed to set log destination")]
     SetLogFd,
+
+    #[error("failed to bring up Tailscale connection: {0}")]
+    UpFailed(String),
+
+    #[error("failed to create listener on {network}://{addr}: {message}")]
+    ListenFailed {
+        network: String,
+        addr: String,
+        message: String,
+    },
+
+    #[error("failed to dial {network}://{addr}: {message}")]
+    DialFailed {
+        network: String,
+        addr: String,
+        message: String,
+    },
+
+    #[error("failed to accept connection: {0}")]
+    AcceptFailed(String),
 
     #[error("tailscale error: {0}")]
     Tailscale(String),
@@ -205,9 +250,8 @@ impl TailscaleBuilder {
     ///
     /// * `key` - The Tailscale authentication key
     pub fn auth_key(&mut self, key: impl Into<String>) -> &mut Self {
-        let new = self;
-        new.auth_key = Some(key.into());
-        new
+        self.auth_key = Some(key.into());
+        self
     }
 
     /// Sets whether this node should be ephemeral.
@@ -218,9 +262,8 @@ impl TailscaleBuilder {
     ///
     /// * `ephemeral` - Whether the node should be ephemeral
     pub fn ephemeral(&mut self, ephemeral: bool) -> &mut Self {
-        let new = self;
-        new.ephemeral = ephemeral;
-        new
+        self.ephemeral = ephemeral;
+        self
     }
 
     /// Sets the hostname for this Tailscale node.
@@ -229,9 +272,8 @@ impl TailscaleBuilder {
     ///
     /// * `hostname` - The desired hostname for the node
     pub fn hostname(&mut self, hostname: impl Into<String>) -> &mut Self {
-        let new = self;
-        new.hostname = Some(hostname.into());
-        new
+        self.hostname = Some(hostname.into());
+        self
     }
 
     /// Sets the state directory for Tailscale to store its configuration.
@@ -240,9 +282,8 @@ impl TailscaleBuilder {
     ///
     /// * `dir` - Path to the directory where Tailscale should store its state
     pub fn dir(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
-        let new = self;
-        new.dir = Some(dir.into());
-        new
+        self.dir = Some(dir.into());
+        self
     }
 
     /// Sets a custom log destination for Tailscale logging output.
@@ -463,7 +504,10 @@ impl Listener {
         .await
         .map_err(TailscaleError::SpawnBlockingFailed)?;
 
-        self._tailscale.handle_error(ret)?;
+        if ret != 0 {
+            let error_message = self._tailscale.get_error_message()?;
+            return Err(TailscaleError::AcceptFailed(error_message));
+        }
         debug!(fd = out_fd, "accepted connection");
 
         // Set the fd to non-blocking mode
@@ -529,7 +573,10 @@ impl Tailscale {
             .await
             .map_err(TailscaleError::SpawnBlockingFailed)?;
 
-        self.handle_error(ret)?;
+        if ret != 0 {
+            let error_message = self.get_error_message()?;
+            return Err(TailscaleError::UpFailed(error_message));
+        }
         debug!("Tailscale connection is up");
         Ok(())
     }
@@ -538,7 +585,7 @@ impl Tailscale {
     ///
     /// # Arguments
     ///
-    /// * `network` - The network type (e.g., "tcp")
+    /// * `network` - The network type (e.g., `NetworkType::Tcp`)
     /// * `addr` - The address to listen on (e.g., ":8080")
     ///
     /// # Errors
@@ -546,26 +593,33 @@ impl Tailscale {
     /// Returns an error if creating the listener fails.
     pub async fn listener(
         self: &Arc<Tailscale>,
-        network: &str,
-        // addr: impl ToSocketAddrs,
+        network: NetworkType,
         addr: &str,
     ) -> Result<Arc<Listener>> {
         debug!(%network, %addr, "creating listener");
-        let network = std::ffi::CString::new(network).map_err(TailscaleError::Utf8Error)?;
-        let addr = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
+        let network_str = network.as_str();
+        let network_cstring = std::ffi::CString::new(network_str).map_err(TailscaleError::Utf8Error)?;
+        let addr_cstring = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
         let sd = self.sd;
 
         // Use spawn_blocking for the blocking C call
         let (listener, ret) = tokio::task::spawn_blocking(move || {
             let mut listener = 0;
             let ret =
-                unsafe { tailscale_listen(sd, network.as_ptr(), addr.as_ptr(), &mut listener) };
+                unsafe { tailscale_listen(sd, network_cstring.as_ptr(), addr_cstring.as_ptr(), &mut listener) };
             (listener, ret)
         })
         .await
         .map_err(TailscaleError::SpawnBlockingFailed)?;
 
-        self.handle_error(ret)?;
+        if ret != 0 {
+            let error_message = self.get_error_message()?;
+            return Err(TailscaleError::ListenFailed {
+                network: network_str.to_string(),
+                addr: addr.to_string(),
+                message: error_message,
+            });
+        }
         debug!(fd = listener, "listener created");
 
         Ok(Arc::new(Listener {
@@ -578,28 +632,36 @@ impl Tailscale {
     ///
     /// # Arguments
     ///
-    /// * `network` - The network type (e.g., "tcp")
+    /// * `network` - The network type (e.g., `NetworkType::Tcp`)
     /// * `addr` - The address to connect to (e.g., "hostname:8080")
     ///
     /// # Errors
     ///
     /// Returns an error if the connection cannot be established.
-    pub async fn connect(&self, network: &str, addr: &str) -> Result<Connection> {
+    pub async fn connect(&self, network: NetworkType, addr: &str) -> Result<Connection> {
         debug!(%network, %addr, "connecting");
-        let network = std::ffi::CString::new(network).map_err(TailscaleError::Utf8Error)?;
-        let addr = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
+        let network_str = network.as_str();
+        let network_cstring = std::ffi::CString::new(network_str).map_err(TailscaleError::Utf8Error)?;
+        let addr_cstring = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
         let sd = self.sd;
 
         // Use spawn_blocking for the blocking C call
         let (conn_fd, ret) = tokio::task::spawn_blocking(move || {
             let mut conn_fd = 0;
-            let ret = unsafe { tailscale_dial(sd, network.as_ptr(), addr.as_ptr(), &mut conn_fd) };
+            let ret = unsafe { tailscale_dial(sd, network_cstring.as_ptr(), addr_cstring.as_ptr(), &mut conn_fd) };
             (conn_fd, ret)
         })
         .await
         .map_err(TailscaleError::SpawnBlockingFailed)?;
 
-        self.handle_error(ret)?;
+        if ret != 0 {
+            let error_message = self.get_error_message()?;
+            return Err(TailscaleError::DialFailed {
+                network: network_str.to_string(),
+                addr: addr.to_string(),
+                message: error_message,
+            });
+        }
         debug!(fd = conn_fd, "connection established");
 
         // Set the fd to non-blocking mode
