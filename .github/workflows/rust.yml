@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,16 +20,17 @@ jobs:
           - macos-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: "1.25"
-    - name: Compile go library
-      run: make libtailscale2.a
-    - uses: Swatinem/rust-cache@v2
-    - name: Build
-      run: cargo build --verbose --all-features --all-targets
-    - name: Run tests
-      run: cargo test --verbose
-
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+      - name: Compile go library
+        run: make libtailscale2.a
+      - uses: Swatinem/rust-cache@v2
+      - name: Check format
+        run: cargo fmt --check
+      - name: Build
+        run: cargo build --verbose --all-features --all-targets
+      - name: Run tests
+        run: cargo test --verbose
