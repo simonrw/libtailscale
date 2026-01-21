@@ -125,20 +125,16 @@ pub enum TailscaleError {
 pub type Result<T> = std::result::Result<T, TailscaleError>;
 
 /// Configuration for Tailscale logging output.
+#[derive(Default)]
 pub enum LogConfig {
     /// Use Tailscale's default logging behavior.
+    #[default]
     Default,
     /// Write logs to a custom log destination.
     /// The log destination will be owned and kept alive for the Tailscale instance lifetime.
     Fd(OwnedFd),
     /// Discard all log output.
     Discard,
-}
-
-impl Default for LogConfig {
-    fn default() -> Self {
-        LogConfig::Default
-    }
 }
 
 /// Builder for configuring and creating a Tailscale instance.
@@ -241,7 +237,10 @@ impl TailscaleBuilder {
         };
 
         debug!("Tailscale instance built successfully");
-        Ok(Arc::new(Tailscale { sd, _log_fd: log_fd }))
+        Ok(Arc::new(Tailscale {
+            sd,
+            _log_fd: log_fd,
+        }))
     }
 
     /// Sets the authentication key for this Tailscale instance.
@@ -601,15 +600,22 @@ impl Tailscale {
     ) -> Result<Arc<Listener>> {
         debug!(%network, %addr, "creating listener");
         let network_str = network.as_str();
-        let network_cstring = std::ffi::CString::new(network_str).map_err(TailscaleError::Utf8Error)?;
+        let network_cstring =
+            std::ffi::CString::new(network_str).map_err(TailscaleError::Utf8Error)?;
         let addr_cstring = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
         let sd = self.sd;
 
         // Use spawn_blocking for the blocking C call
         let (listener, ret) = tokio::task::spawn_blocking(move || {
             let mut listener = 0;
-            let ret =
-                unsafe { tailscale_listen(sd, network_cstring.as_ptr(), addr_cstring.as_ptr(), &mut listener) };
+            let ret = unsafe {
+                tailscale_listen(
+                    sd,
+                    network_cstring.as_ptr(),
+                    addr_cstring.as_ptr(),
+                    &mut listener,
+                )
+            };
             (listener, ret)
         })
         .await
@@ -644,14 +650,22 @@ impl Tailscale {
     pub async fn connect(&self, network: NetworkType, addr: &str) -> Result<Connection> {
         debug!(%network, %addr, "connecting");
         let network_str = network.as_str();
-        let network_cstring = std::ffi::CString::new(network_str).map_err(TailscaleError::Utf8Error)?;
+        let network_cstring =
+            std::ffi::CString::new(network_str).map_err(TailscaleError::Utf8Error)?;
         let addr_cstring = std::ffi::CString::new(addr).map_err(TailscaleError::Utf8Error)?;
         let sd = self.sd;
 
         // Use spawn_blocking for the blocking C call
         let (conn_fd, ret) = tokio::task::spawn_blocking(move || {
             let mut conn_fd = 0;
-            let ret = unsafe { tailscale_dial(sd, network_cstring.as_ptr(), addr_cstring.as_ptr(), &mut conn_fd) };
+            let ret = unsafe {
+                tailscale_dial(
+                    sd,
+                    network_cstring.as_ptr(),
+                    addr_cstring.as_ptr(),
+                    &mut conn_fd,
+                )
+            };
             (conn_fd, ret)
         })
         .await

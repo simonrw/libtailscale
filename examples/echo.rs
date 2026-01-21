@@ -1,6 +1,6 @@
 use tailscale2::*;
 use tokio::io::AsyncReadExt;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 async fn handle_connection(mut conn: Connection) {
     let mut buf = [0u8; 2048];
@@ -23,7 +23,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
 
